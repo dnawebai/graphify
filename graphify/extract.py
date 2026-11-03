@@ -429,7 +429,8 @@ def _suppress_ambiguous_python_imports(
             str(module_name), str(edge.get("source_file", "")),
             str(edge.get("source_location", "")), str(edge.get("source", "")),
         ))
-        target = _make_id(f"ambiguous_python_import_{hashlib.sha1(identity.encode()).hexdigest()[:12]}")
+        digest = hashlib.sha1(identity.encode(), usedforsecurity=False).hexdigest()[:12]
+        target = _make_id(f"ambiguous_python_import_{digest}")
         while target in node_ids:
             target += "_"
         edge["target"] = target

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from graphify.build import build_from_json
 from graphify.detect import FileType, classify_file
 from graphify.extract import extract
@@ -166,6 +168,32 @@ def test_pom_billion_laughs_is_refused_regardless_of_expat(tmp_path):
     r = extract_package_manifest(p)
     assert r["nodes"] == [] and r["edges"] == []
     assert "refusing XML with DOCTYPE/ENTITY declaration" in r["error"]
+
+
+@pytest.mark.parametrize("codec", ["utf-16-le", "utf-16-be"])
+@pytest.mark.parametrize("declaration", [True, False])
+def test_bomless_utf16_pom_with_dtd_is_refused(tmp_path, codec, declaration):
+    # Read as UTF-8, a BOM-less UTF-16 file keeps a NUL after every letter, so
+    # a "<!doctype" substring scan misses it, but expat still detects UTF-16
+    # and expanded the entity into a "g:smuggled-name" package.
+    prolog = '<?xml version="1.0" encoding="utf-16"?>\n' if declaration else ""
+    p = tmp_path / "pom.xml"
+    p.write_bytes((prolog
+                   + '<!DOCTYPE project [ <!ENTITY injected "smuggled-name"> ]>\n'
+                   "<project><groupId>g</groupId><artifactId>&injected;</artifactId>"
+                   "</project>").encode(codec))
+    r = extract_package_manifest(p)
+    assert r["nodes"] == [] and r["edges"] == []
+    assert "refusing XML with DOCTYPE/ENTITY declaration" in r["error"]
+
+
+@pytest.mark.parametrize("codec", ["utf-16-le", "utf-16-be"])
+def test_bomless_utf16_pom_without_dtd_still_parses(tmp_path, codec):
+    p = tmp_path / "pom.xml"
+    p.write_bytes("<project><groupId>g</groupId><artifactId>real-name</artifactId>"
+                  "<version>1</version></project>".encode(codec))
+    r = extract_package_manifest(p)
+    assert [n["label"] for n in r["nodes"]] == ["g:real-name"]
 
 
 # ── #2434: Cargo.toml joins pyproject.toml/go.mod/pom.xml as a package manifest ─

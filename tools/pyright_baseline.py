@@ -179,6 +179,12 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"pyright-baseline: {exc}", file=sys.stderr)
         return 2
+    # Any other JSON (the baseline file itself, say) would read as zero errors
+    # and pass.
+    if not isinstance(report, dict) or not isinstance(report.get("generalDiagnostics"), list):
+        print("pyright-baseline: not a `pyright --outputjson` report "
+              "(no generalDiagnostics list).", file=sys.stderr)
+        return 2
     current = count_errors(report)
     version = report.get("version", "")
 

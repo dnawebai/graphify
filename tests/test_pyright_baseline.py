@@ -60,6 +60,17 @@ def test_update_refuses_a_saved_report_without_running_pyright(tmp_path, monkeyp
     assert not (tmp_path / "baseline.json").exists()
 
 
+def test_check_rejects_json_that_is_not_a_pyright_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(pb, "BASELINE", tmp_path / "baseline.json")
+    pb.dump_baseline(pb.count_errors(_report(_diag("graphify/a.py", 1, "r", "m"))), "1.1.999")
+    # The baseline file itself parses as JSON but has no diagnostics; it used
+    # to read as zero errors and pass.
+    assert pb.main(["--report", str(tmp_path / "baseline.json")]) == 2
+    not_a_dict = tmp_path / "list.json"
+    not_a_dict.write_text("[]")
+    assert pb.main(["--report", str(not_a_dict)]) == 2
+
+
 def test_update_refuses_without_every_applicable_extra(tmp_path, monkeypatch):
     def no_pyright() -> dict:
         raise AssertionError("pyright must not run")

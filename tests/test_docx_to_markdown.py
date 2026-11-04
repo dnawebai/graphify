@@ -54,6 +54,26 @@ def test_plain_paragraphs_keep_their_markdown(tmp_path):
     ]
 
 
+def test_a_paragraph_style_without_a_name_does_not_drop_the_document(tmp_path):
+    # <w:name> is optional on a style, and python-docx reports such a style's
+    # name as None. One paragraph using it used to make the whole document
+    # convert to "".
+    document = docx.Document()
+    document.add_heading("Payments design", level=1)
+    document.styles.element.append(parse_xml(
+        f'<w:style {_NAMESPACES} w:type="paragraph" w:styleId="Unnamed"/>'
+    ))
+    paragraph = document.add_paragraph("Retries are idempotent.")
+    paragraph._p.get_or_add_pPr().get_or_add_pStyle().set(
+        "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val", "Unnamed"
+    )
+
+    assert _markdown(document, tmp_path) == [
+        "# Payments design",
+        "Retries are idempotent.",
+    ]
+
+
 def test_a_table_stays_under_its_heading(tmp_path):
     document = docx.Document()
     document.add_heading("Pricing", level=1)

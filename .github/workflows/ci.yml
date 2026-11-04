@@ -7,6 +7,11 @@ on:
     branches: ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "main"]
   workflow_dispatch:
 
+# No job writes to the repo, comments, or publishes; keep GITHUB_TOKEN read-only
+# and grant more per job if one ever needs it.
+permissions:
+  contents: read
+
 jobs:
   skillgen-check:
     # Fast lint-style guard: the skill files under graphify/ are generated from
@@ -72,6 +77,14 @@ jobs:
 
       - name: Run tests
         run: uv run --frozen pytest tests/ -q --tb=short
+
+      # pyright has a known backlog, so fail only on errors missing from
+      # tools/pyright_baseline.json. It needs the --all-extras install above
+      # (without the extras pyright sees fewer types); one Python is enough
+      # because the baseline ignores the version-dependent missing imports.
+      - name: Type-check (no new pyright errors)
+        if: matrix.python-version == '3.13'
+        run: uv run --frozen python -m tools.pyright_baseline
 
       - name: Verify install works end-to-end
         run: |

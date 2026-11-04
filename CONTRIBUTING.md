@@ -52,8 +52,10 @@ uv run pytest tests/ -q
 
 # Run linters and type checkers before pushing
 uv run ruff check .
-uv run pyright
+uv run python -m tools.pyright_baseline   # fails only on pyright errors not in the baseline
 ```
+
+- **pyright baseline**: plain `uv run pyright` reports a known backlog, so CI runs `tools.pyright_baseline` instead, which fails only on errors not listed in `tools/pyright_baseline.json`. If your change fixes some, run `uv run python -m tools.pyright_baseline --update` (with `--all-extras` installed) and commit the smaller baseline. Don't add new entries to get a PR green.
 
 - **Python versions**: 3.10+
 - **uv**: We use `uv` for dependency management.
@@ -75,7 +77,7 @@ uv run pyright
 5. Add regression test
 6. Run targeted tests
 7. Run full suite (`uv run pytest tests`)
-8. Run lint/type checks (`uv run ruff check .`, `uv run pyright`)
+8. Run lint/type checks (`uv run ruff check .`, `uv run python -m tools.pyright_baseline`)
 9. Regenerate artifacts if you touched their sources (`uv run python -m tools.skillgen --bless`).
 
 ## Tests
@@ -130,7 +132,7 @@ AI assistants are welcome, but every rule in this guide applies to the code they
 - Point your agent at this file and [ARCHITECTURE.md](ARCHITECTURE.md) before it changes anything.
 - Branch off `upstream/v8`, keep the PR to one concern, and never let an agent hand-edit generated skill files.
 - For bug fixes, confirm the regression test fails without the fix, not only that it passes with it.
-- Run the checks yourself before opening the PR: `uv run pytest tests`, `uv run ruff check .`, `uv run pyright`.
+- Run the checks yourself before opening the PR: `uv run pytest tests`, `uv run ruff check .`, `uv run python -m tools.pyright_baseline`.
 - Disclose material AI help with a `Co-Authored-By:` trailer, as described under [Commit Messages](#commit-messages).
 - Write the PR description yourself, and list the commands you actually ran.
 

@@ -720,7 +720,10 @@ def docx_to_markdown(path: Path) -> str:
                     lines.append("| " + " | ".join(row) + " |")
                 continue
             para = Paragraph(block, doc)
-            style = para.style.name if para.style else ""
+            # A style with no <w:name> (allowed by the schema) has name None.
+            # Calling .startswith on it raised, and the except below then
+            # dropped the whole document as "".
+            style = (para.style.name or "") if para.style else ""
             text = _docx_paragraph_text(block).strip()
             if not text:
                 lines.append("")

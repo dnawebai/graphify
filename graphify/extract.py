@@ -8219,13 +8219,12 @@ def _project_xml_is_safe(src: bytes) -> bool:
     ``<!DOCTYPE`` / ``<!ENTITY`` outright is defense in depth.
 
     Legitimate MSBuild and Lazarus package files never contain a DOCTYPE
-    or ENTITY declaration, so this is a zero-false-positive screen.
+    or ENTITY declaration, so this is a zero-false-positive screen. The check
+    covers UTF-16 too; see :mod:`graphify.xml_safety`.
     """
-    # Only the prolog can hold a DTD/internal subset, but be conservative
-    # and scan the full byte range -- these formats use ASCII tags so a
-    # case-insensitive substring match is sufficient.
-    lowered = src.lower()
-    return b"<!doctype" not in lowered and b"<!entity" not in lowered
+    from .xml_safety import declares_dtd
+
+    return not declares_dtd(src)
 
 
 def extract_lazarus_package(path: Path) -> dict:
@@ -8258,7 +8257,8 @@ def extract_lazarus_package(path: Path) -> dict:
                 "error": "refusing XML with DOCTYPE/ENTITY declaration"}
 
     try:
-        xml_root = ET.fromstring(src)
+        # Size cap and _project_xml_is_safe (no DOCTYPE/ENTITY) checked above.
+        xml_root = ET.fromstring(src)  # nosec B314
     except Exception as e:
         return {"nodes": [], "edges": [], "error": str(e)}
 
@@ -8365,7 +8365,8 @@ def extract_slnx(path: Path) -> dict:
                 "error": "refusing XML with DOCTYPE/ENTITY declaration"}
 
     try:
-        tree = ET.fromstring(src)
+        # Size cap and _project_xml_is_safe (no DOCTYPE/ENTITY) checked above.
+        tree = ET.fromstring(src)  # nosec B314
     except ET.ParseError as e:
         return {"nodes": [], "edges": [], "error": f"XML parse error: {e}"}
 
@@ -8444,7 +8445,8 @@ def extract_csproj(path: Path) -> dict:
                 "error": "refusing XML with DOCTYPE/ENTITY declaration"}
 
     try:
-        tree = ET.fromstring(src)
+        # Size cap and _project_xml_is_safe (no DOCTYPE/ENTITY) checked above.
+        tree = ET.fromstring(src)  # nosec B314
     except ET.ParseError as e:
         return {"nodes": [], "edges": [], "error": f"XML parse error: {e}"}
 
@@ -8965,7 +8967,8 @@ def extract_xaml(path: Path) -> dict:
                 "error": "refusing XML with DOCTYPE/ENTITY declaration"}
 
     try:
-        tree = ET.fromstring(src)
+        # Size cap and _project_xml_is_safe (no DOCTYPE/ENTITY) checked above.
+        tree = ET.fromstring(src)  # nosec B314
     except ET.ParseError as e:
         return {"nodes": [], "edges": [], "error": f"XML parse error: {e}"}
 

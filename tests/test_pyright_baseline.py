@@ -66,9 +66,18 @@ def test_check_rejects_json_that_is_not_a_pyright_report(tmp_path, monkeypatch):
     # The baseline file itself parses as JSON but has no diagnostics; it used
     # to read as zero errors and pass.
     assert pb.main(["--report", str(tmp_path / "baseline.json")]) == 2
-    not_a_dict = tmp_path / "list.json"
-    not_a_dict.write_text("[]")
-    assert pb.main(["--report", str(not_a_dict)]) == 2
+    bad = {
+        "list.json": b"[]",
+        "null-entry.json": b'{"generalDiagnostics": [null]}',
+        "no-file.json": b'{"generalDiagnostics": [{"severity": "error"}]}',
+        "not-json.json": b"not json",
+        # Windows PowerShell 5.1 `pyright --outputjson > report.json` writes UTF-16.
+        "utf16.json": json.dumps(_report(_diag("graphify/a.py", 1, "r", "m"))).encode("utf-16"),
+    }
+    for name, content in bad.items():
+        path = tmp_path / name
+        path.write_bytes(content)
+        assert pb.main(["--report", str(path)]) == 2, name
 
 
 def test_update_refuses_without_every_applicable_extra(tmp_path, monkeypatch):

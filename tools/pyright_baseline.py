@@ -54,8 +54,8 @@ def _relative(path: str) -> str:
 def _key(diag: dict) -> Key | None:
     if diag.get("severity") != "error":
         return None
-    rule = diag.get("rule", "")
-    message = diag.get("message", "").splitlines()[0].replace(str(ROOT), "")
+    rule = str(diag.get("rule", ""))
+    message = (str(diag.get("message", "")).splitlines() or [""])[0].replace(str(ROOT), "")
     if rule in MISSING_IMPORT_RULES and not _is_first_party_import(message):
         return None
     return _relative(diag["file"]), f"{rule}: {message}"
@@ -117,10 +117,30 @@ def run_pyright() -> dict:
     # pyright exits 1 when it reports errors; anything else means it didn't run.
     if proc.returncode not in (0, 1):
         raise RuntimeError(f"pyright exited {proc.returncode}: {proc.stderr.strip()[:500]}")
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"pyright did not print JSON: {exc}") from exc
+    return parse_report(proc.stdout)
+
+
+def read_report(path: Path) -> dict:
+    """Load a saved report. Raises ValueError (bad encoding, JSON or shape) or OSError."""
+    return parse_report(path.read_text(encoding="utf-8"))
+
+
+def parse_report(text: str) -> dict:
+    """Parse and check a ``pyright --outputjson`` report, or raise ValueError.
+
+    Every way a report can be unusable ends here, so main() turns all of them
+    into exit 2 instead of a traceback (exit 1 means "new errors") or, worse,
+    a pass: any JSON without diagnostics, such as the baseline file itself,
+    would otherwise read as zero errors.
+    """
+    report = json.loads(text)  # JSONDecodeError is a ValueError
+    diags = report.get("generalDiagnostics") if isinstance(report, dict) else None
+    if not isinstance(diags, list):
+        raise ValueError("not a `pyright --outputjson` report (no generalDiagnostics list)")
+    for diag in diags:
+        if not isinstance(diag, dict) or not isinstance(diag.get("file"), str):
+            raise ValueError("not a `pyright --outputjson` report (a diagnostic has no file)")
+    return report
 
 
 def _missing_extras() -> list[str]:
@@ -174,16 +194,9 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
     try:
-        report = (json.loads(args.report.read_text(encoding="utf-8")) if args.report
-                  else run_pyright())
-    except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+        report = read_report(args.report) if args.report else run_pyright()
+    except (OSError, RuntimeError, ValueError) as exc:  # ValueError: UnicodeDecodeError too
         print(f"pyright-baseline: {exc}", file=sys.stderr)
-        return 2
-    # Any other JSON (the baseline file itself, say) would read as zero errors
-    # and pass.
-    if not isinstance(report, dict) or not isinstance(report.get("generalDiagnostics"), list):
-        print("pyright-baseline: not a `pyright --outputjson` report "
-              "(no generalDiagnostics list).", file=sys.stderr)
         return 2
     current = count_errors(report)
     version = report.get("version", "")
@@ -206,9 +219,9 @@ def main(argv: list[str] | None = None) -> int:
         for diag in report.get("generalDiagnostics", []):
             diag_key = _key(diag)
             if diag_key is not None and diag_key in new:
-                start = diag["range"]["start"]
+                start = (diag.get("range") or {}).get("start") or {}
                 by_key.setdefault(diag_key, []).append(
-                    f"{diag_key[0]}:{start['line'] + 1}:{start['character'] + 1}")
+                    f"{diag_key[0]}:{start.get('line', 0) + 1}:{start.get('character', 0) + 1}")
         for key, n in sorted(new.items()):
             places = by_key.get(key, [key[0]])
             extra = "" if len(places) == n else f" ({n} new of {len(places)} like it)"

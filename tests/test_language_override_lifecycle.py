@@ -2,6 +2,7 @@
 import hashlib
 import json
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -161,7 +162,19 @@ def drive_watch(root, monkeypatch, actions, *, observed_roots=None):
     monkeypatch.setattr(observers, "Observer", Observer)
     monkeypatch.setattr(polling, "PollingObserver", Observer)
     monkeypatch.setattr(watch_mod, "_rebuild_code", rebuild)
-    monkeypatch.setattr(watch_mod.time, "sleep", pump)
+
+    # Swap the watch module's own `time` binding rather than patching
+    # `watch_mod.time.sleep`: that attribute IS `time.sleep` for the whole
+    # process, so any sleep inside the real rebuild (subprocess's wait poll
+    # when `git rev-parse` exits slowly under load) ran `pump`, which ran out
+    # of steps and raised KeyboardInterrupt halfway through the rebuild.
+    class WatchLoopTime:
+        sleep = staticmethod(pump)
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+    monkeypatch.setattr(watch_mod, "time", WatchLoopTime())
     watch_mod.watch(root, debounce=0)
 
 
@@ -182,6 +195,31 @@ def test_watch_declared_code_updates_graph_on_observer_thread(tmp_path, monkeypa
     drive_watch(tmp_path, monkeypatch, [change])
     assert "watched()" in graph_labels(tmp_path)
     assert not (tmp_path / "graphify-out" / "needs_update").exists()
+
+
+def test_drive_watch_survives_a_sleep_inside_the_rebuild(tmp_path, monkeypatch):
+    # Under load, `git rev-parse` in _git_head can still be running when its
+    # output closes, and subprocess's wait loop then calls time.sleep. When the
+    # harness patched time.sleep process-wide, that sleep consumed a step and
+    # ended the watch mid-rebuild with no graph.json; this test made that sleep
+    # deterministic.
+    events = pytest.importorskip("watchdog.events")
+    real_git_head = watch_mod._git_head
+
+    def slow_git_head(*args, **kwargs):
+        time.sleep(0)
+        return real_git_head(*args, **kwargs)
+
+    monkeypatch.setattr(watch_mod, "_git_head", slow_git_head)
+    (tmp_path / ".graphifyrc").write_text("language.tpl=php\n")
+    source = tmp_path / "page.tpl"
+
+    def change():
+        source.write_text("<?php function watched() {}\n")
+        return events.FileModifiedEvent(str(source))
+
+    drive_watch(tmp_path, monkeypatch, [change])
+    assert "watched()" in graph_labels(tmp_path)
 
 
 def test_watch_document_override_marks_semantic_work_instead_of_rebuilding(tmp_path, monkeypatch):

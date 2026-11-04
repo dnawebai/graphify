@@ -8222,10 +8222,44 @@ def _project_xml_is_safe(src: bytes) -> bool:
     or ENTITY declaration, so this is a zero-false-positive screen.
     """
     # Only the prolog can hold a DTD/internal subset, but be conservative
-    # and scan the full byte range -- these formats use ASCII tags so a
-    # case-insensitive substring match is sufficient.
+    # and scan the full byte range first; it's cheap.
     lowered = src.lower()
-    return b"<!doctype" not in lowered and b"<!entity" not in lowered
+    if b"<!doctype" in lowered or b"<!entity" in lowered:
+        return False
+    # The byte scan only sees ASCII-compatible encodings: UTF-16 puts a NUL
+    # between every letter of "<!DOCTYPE", yet ElementTree decodes it and
+    # expands the entities. Ask expat itself, which decodes exactly as
+    # ElementTree will. A DOCTYPE can only precede the root element, so stop
+    # at the first start tag.
+    import xml.parsers.expat as expat
+
+    def _found_dtd(*_args: object) -> None:
+        raise _XMLHasDTD
+
+    def _reached_root(*_args: object) -> None:
+        raise _XMLRootReached
+
+    parser = expat.ParserCreate()
+    parser.StartDoctypeDeclHandler = _found_dtd
+    parser.EntityDeclHandler = _found_dtd
+    parser.StartElementHandler = _reached_root
+    try:
+        parser.Parse(src, True)
+    except _XMLHasDTD:
+        return False
+    except (_XMLRootReached, expat.ExpatError):
+        # Root reached with no DTD, or malformed before it, which
+        # ElementTree.fromstring will report as a parse error.
+        pass
+    return True
+
+
+class _XMLHasDTD(Exception):
+    """Raised from an expat handler when a DOCTYPE or ENTITY is declared."""
+
+
+class _XMLRootReached(Exception):
+    """Raised from an expat handler at the root element; no DTD can follow."""
 
 
 def extract_lazarus_package(path: Path) -> dict:

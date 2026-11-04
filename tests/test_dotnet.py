@@ -173,6 +173,42 @@ def test_csproj_invalid_xml():
     assert "error" in r
 
 
+_ENTITY_CSPROJ = (
+    '<?xml version="1.0" encoding="{enc}"?>\n'
+    '<!DOCTYPE Project [ <!ENTITY injected "Smuggled.Package"> ]>\n'
+    '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>'
+    '<PackageReference Include="&injected;" Version="1.0" />'
+    "</ItemGroup></Project>"
+)
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16", "utf-16-le", "utf-16-be"])
+def test_csproj_with_dtd_is_refused_in_any_encoding(tmp_path, encoding):
+    # The byte scan alone missed UTF-16: "<!DOCTYPE" has a NUL between every
+    # letter, but ElementTree decodes it and expanded the entity into a
+    # "Smuggled.Package" node.
+    codec = "utf-16" if encoding == "utf-16" else encoding  # utf-16 adds a BOM
+    p = tmp_path / "App.csproj"
+    p.write_bytes(_ENTITY_CSPROJ.format(enc="utf-16" if "16" in encoding else encoding)
+                  .encode(codec))
+    r = extract_csproj(p)
+    assert r["nodes"] == [] and r["edges"] == []
+    assert r["error"] == "refusing XML with DOCTYPE/ENTITY declaration"
+
+
+def test_csproj_in_utf16_without_dtd_still_parses(tmp_path):
+    p = tmp_path / "App.csproj"
+    p.write_bytes(
+        ('<?xml version="1.0" encoding="utf-16"?>\n'
+         '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>'
+         '<PackageReference Include="Real.Package" Version="1.0" />'
+         "</ItemGroup></Project>").encode("utf-16")
+    )
+    r = extract_csproj(p)
+    assert "error" not in r
+    assert any("Real.Package" in label for label in _labels(r))
+
+
 # ── .xaml ────────────────────────────────────────────────────────────────────
 
 def test_xaml_class_resolves_to_codebehind_partial_class():

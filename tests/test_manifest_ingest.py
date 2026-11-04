@@ -137,6 +137,37 @@ def test_malformed_manifest_does_not_crash(tmp_path):
     assert r["nodes"] == [] and r["edges"] == []
 
 
+# ── pom.xml with a DTD or entities is refused before ElementTree sees it ──────
+
+def test_pom_internal_entity_is_refused_not_expanded(tmp_path):
+    # Before the screen, the entity expanded and produced a package node named
+    # "g:smuggled-name", a name that appears nowhere literally in the file.
+    p = _write(tmp_path / "pom.xml",
+               '<?xml version="1.0"?>\n'
+               '<!DOCTYPE project [ <!ENTITY injected "smuggled-name"> ]>\n'
+               "<project><groupId>g</groupId><artifactId>&injected;</artifactId>"
+               "<version>1</version></project>")
+    r = extract_package_manifest(p)
+    assert r["nodes"] == [] and r["edges"] == []
+    assert "DOCTYPE/ENTITY" in r["error"]
+
+
+def test_pom_billion_laughs_is_refused_regardless_of_expat(tmp_path):
+    # Expat >= 2.4.0 would also stop this, but with its own amplification error;
+    # the screen must reject it first so an older system libexpat never parses it.
+    entities = ['<!ENTITY lol0 "lollollollollollollollollollol">']
+    entities += [
+        f'<!ENTITY lol{i} "{("&lol%d;" % (i - 1)) * 10}">' for i in range(1, 10)
+    ]
+    p = _write(tmp_path / "pom.xml",
+               '<?xml version="1.0"?>\n<!DOCTYPE lolz [\n' + "\n".join(entities)
+               + "\n]>\n<project><groupId>g</groupId>"
+               "<artifactId>&lol9;</artifactId></project>")
+    r = extract_package_manifest(p)
+    assert r["nodes"] == [] and r["edges"] == []
+    assert "refusing XML with DOCTYPE/ENTITY declaration" in r["error"]
+
+
 # ── #2434: Cargo.toml joins pyproject.toml/go.mod/pom.xml as a package manifest ─
 
 def test_cargo_classifies_as_code_manifest(tmp_path):

@@ -289,9 +289,18 @@ def _parse_gomod(text: str) -> dict | None:
 
 
 def _parse_pom(text: str) -> dict | None:
+    # Maven POMs never declare a DTD or entities, so refuse any that do, the same
+    # screen extract._project_xml_is_safe applies to .csproj/.slnx/.xaml/.lpk
+    # (extract imports this module, so that helper can't be shared here). Expat
+    # >= 2.4.0 caps entity amplification itself, but a Python linked against an
+    # older system libexpat would expand a billion-laughs pom.xml in full.
+    lowered = text.lower()
+    if "<!doctype" in lowered or "<!entity" in lowered:
+        raise ValueError("refusing XML with DOCTYPE/ENTITY declaration")
     # Drop the default namespace so findtext/findall don't need the {uri} prefix.
     text = re.sub(r'\sxmlns="[^"]*"', '', text, count=1)
-    root = ET.fromstring(text)
+    # DOCTYPE/ENTITY refused above; extract_package_manifest caps the size.
+    root = ET.fromstring(text)  # nosec B314
     aid = root.findtext("artifactId")
     gid = root.findtext("groupId") or root.findtext("parent/groupId")
     version = root.findtext("version") or root.findtext("parent/version")

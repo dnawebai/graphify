@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections import Counter
 
 from tools import pyright_baseline as pb
@@ -29,6 +30,63 @@ def test_keys_ignore_line_numbers_warnings_and_environment_rules():
         _diag("graphify/a.py", 6, "reportArgumentType", "a warning", severity="warning"),
     ))
     assert counts == Counter({("graphify/a.py", 'reportArgumentType: Argument of type "x"'): 2})
+
+
+def test_missing_first_party_imports_are_kept_third_party_and_stdlib_are_not():
+    def missing(name: str) -> dict:
+        return _diag("graphify/a.py", 1, "reportMissingImports",
+                     f'Import "{name}" could not be resolved')
+
+    counts = pb.count_errors(_report(
+        missing("graphify.nonexistent"), missing(".sibling"), missing("tests.helpers"),
+        missing("graspologic.partition"), missing("tomllib"), missing("faster_whisper"),
+    ))
+    assert {entry for _, entry in counts} == {
+        'reportMissingImports: Import "graphify.nonexistent" could not be resolved',
+        'reportMissingImports: Import ".sibling" could not be resolved',
+        'reportMissingImports: Import "tests.helpers" could not be resolved',
+    }
+
+
+def test_update_refuses_a_saved_report_without_running_pyright(tmp_path, monkeypatch):
+    def no_pyright() -> dict:
+        raise AssertionError("pyright must not run")
+
+    monkeypatch.setattr(pb, "run_pyright", no_pyright)
+    monkeypatch.setattr(pb, "BASELINE", tmp_path / "baseline.json")
+    report = tmp_path / "partial.json"
+    report.write_text(json.dumps(_report()))
+    assert pb.main(["--update", "--report", str(report)]) == 2
+    assert not (tmp_path / "baseline.json").exists()
+
+
+def test_update_refuses_without_every_applicable_extra(tmp_path, monkeypatch):
+    def no_pyright() -> dict:
+        raise AssertionError("pyright must not run")
+
+    monkeypatch.setattr(pb, "run_pyright", no_pyright)
+    monkeypatch.setattr(pb, "BASELINE", tmp_path / "baseline.json")
+    monkeypatch.setattr(pb, "_missing_extras", lambda: ["graspologic-native"])
+    assert pb.main(["--update"]) == 2
+    assert not (tmp_path / "baseline.json").exists()
+
+
+def test_extras_are_read_from_the_all_extra(monkeypatch):
+    from importlib import metadata
+
+    real_version = metadata.version
+
+    def version(name: str) -> str:
+        if name == "python-docx":
+            raise metadata.PackageNotFoundError(name)
+        return real_version(name)
+
+    monkeypatch.setattr(metadata, "version", version)
+    missing = pb._missing_extras()
+    assert "python-docx" in missing
+    # Marker-gated entries for other Python versions are never required.
+    if sys.version_info >= (3, 12):
+        assert "jieba" not in missing
 
 
 def test_moved_errors_pass_and_extra_occurrences_fail():

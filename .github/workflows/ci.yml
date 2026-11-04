@@ -7,6 +7,11 @@ on:
     branches: ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "main"]
   workflow_dispatch:
 
+# No job writes to the repo, comments, or publishes; keep GITHUB_TOKEN read-only
+# and grant more per job if one ever needs it.
+permissions:
+  contents: read
+
 jobs:
   skillgen-check:
     # Fast lint-style guard: the skill files under graphify/ are generated from

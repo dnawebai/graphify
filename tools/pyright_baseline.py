@@ -12,19 +12,21 @@ Usage (from the repo root, with ``uv sync --all-extras``):
     uv run python -m tools.pyright_baseline --update   # rewrite the baseline
 
 An error is keyed by file, rule and message, not line number, so edits that
-only move existing errors don't count as new ones. ``reportMissingImports``
-and ``reportMissingModuleSource`` are left out: which optional packages
-install depends on the Python version (graspologic vs graspologic-native,
+only move existing errors don't count as new ones. Missing imports of
+third-party and stdlib modules are left out: which optional packages install
+depends on the Python version (graspologic vs graspologic-native,
 faster-whisper, tomllib), and those were the only differences between 3.10,
-3.12 and 3.13. Without the optional extras pyright sees fewer types and
-reports a subset of the baseline, so a check still can't fail falsely, but
-``--update`` refuses to run, because it would drop those entries.
+3.12 and 3.13. Missing imports of graphify's own modules are still checked,
+since a typo there fails at runtime everywhere. Without the optional extras
+pyright sees fewer types and reports a subset of the baseline, so a check
+still can't fail falsely, but ``--update`` refuses to run, because it would
+drop those entries; it also always does a fresh full-project run.
 """
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -33,11 +35,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = Path(__file__).resolve().parent / "pyright_baseline.json"
 
-# Depend on the interpreter's installed packages, not on graphify's code.
-ENVIRONMENT_RULES = frozenset({"reportMissingImports", "reportMissingModuleSource"})
-
-# Present only with `uv sync --all-extras`; each changes what pyright can type.
-EXTRAS_PROBES = ("docx", "mcp", "neo4j", "psycopg", "openpyxl", "matplotlib")
+# Missing-import rules depend on the interpreter's installed packages, except
+# for imports of the project's own top-level packages.
+MISSING_IMPORT_RULES = frozenset({"reportMissingImports", "reportMissingModuleSource"})
+FIRST_PARTY = frozenset({"graphify", "tests", "tools"})
+_IMPORT_NAME = re.compile(r'^Import "([^"]+)"')
 
 Key = tuple[str, str]  # (relative file, "rule: message")
 
@@ -53,10 +55,19 @@ def _key(diag: dict) -> Key | None:
     if diag.get("severity") != "error":
         return None
     rule = diag.get("rule", "")
-    if rule in ENVIRONMENT_RULES:
-        return None
     message = diag.get("message", "").splitlines()[0].replace(str(ROOT), "")
+    if rule in MISSING_IMPORT_RULES and not _is_first_party_import(message):
+        return None
     return _relative(diag["file"]), f"{rule}: {message}"
+
+
+def _is_first_party_import(message: str) -> bool:
+    """True for a missing import of graphify's own code (or a relative import)."""
+    match = _IMPORT_NAME.match(message)
+    if not match:
+        return False
+    module = match.group(1)
+    return module.startswith(".") or module.split(".")[0] in FIRST_PARTY
 
 
 def count_errors(report: dict) -> Counter[Key]:
@@ -101,7 +112,7 @@ def compare(current: Counter[Key], baseline: Counter[Key]) -> tuple[Counter[Key]
 def run_pyright() -> dict:
     proc = subprocess.run(
         [sys.executable, "-m", "pyright", "--outputjson"],
-        cwd=ROOT, capture_output=True, text=True,
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     # pyright exits 1 when it reports errors; anything else means it didn't run.
     if proc.returncode not in (0, 1):
@@ -113,31 +124,65 @@ def run_pyright() -> dict:
 
 
 def _missing_extras() -> list[str]:
-    return [name for name in EXTRAS_PROBES if importlib.util.find_spec(name) is None]
+    """Packages in the ``all`` extra that apply to this Python but aren't installed.
+
+    Each one changes what pyright can type, so a run without it is a subset.
+    Read from pyproject.toml so a new extra is covered without editing this.
+    """
+    from importlib import metadata
+
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10: tomli is a dev dependency there
+        import tomli as tomllib  # type: ignore[no-redef]
+    try:
+        from packaging.requirements import Requirement
+    except ImportError:
+        return ["packaging (needed to read the extras)"]
+
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    missing = []
+    for spec in pyproject["project"]["optional-dependencies"]["all"]:
+        req = Requirement(spec)
+        if req.marker is not None and not req.marker.evaluate():
+            continue
+        try:
+            metadata.version(req.name)
+        except metadata.PackageNotFoundError:
+            missing.append(req.name)
+    return missing
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Fail on pyright errors that are not in the committed baseline.")
     parser.add_argument("--update", action="store_true", help="rewrite the baseline from this run")
-    parser.add_argument("--report", type=Path, help="use a saved `pyright --outputjson` report")
+    parser.add_argument("--report", type=Path,
+                        help="check a saved `pyright --outputjson` report (not with --update)")
     args = parser.parse_args(argv)
 
+    if args.update and args.report:
+        # A saved report could come from a single-file run or another
+        # environment; only a fresh full-project run here may become the baseline.
+        print("pyright-baseline: --update always runs pyright itself; drop --report.",
+              file=sys.stderr)
+        return 2
+    missing = _missing_extras()
+    if args.update and missing:
+        print("pyright-baseline: refusing to update without the optional extras "
+              f"(missing: {', '.join(missing)}); run `uv sync --all-extras` first.",
+              file=sys.stderr)
+        return 2
     try:
-        report = json.loads(args.report.read_text()) if args.report else run_pyright()
+        report = (json.loads(args.report.read_text(encoding="utf-8")) if args.report
+                  else run_pyright())
     except (OSError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"pyright-baseline: {exc}", file=sys.stderr)
         return 2
     current = count_errors(report)
     version = report.get("version", "")
-    missing = _missing_extras()
 
     if args.update:
-        if missing:
-            print("pyright-baseline: refusing to update without the optional extras "
-                  f"(missing: {', '.join(missing)}); run `uv sync --all-extras` first.",
-                  file=sys.stderr)
-            return 2
         dump_baseline(current, version)
         print(f"pyright-baseline: wrote {sum(current.values())} errors to "
               f"{_relative(str(BASELINE))}")
@@ -174,8 +219,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"pyright-baseline: {fixed} baseline error(s) no longer occur; run with "
               "--update to lock that in.")
     elif missing:
-        print("pyright-baseline: note: optional extras not installed "
-              f"({', '.join(missing)}), so this run sees fewer errors than CI.")
+        shown = ", ".join(missing[:6]) + (f" +{len(missing) - 6} more" if len(missing) > 6 else "")
+        print(f"pyright-baseline: note: optional extras not installed ({shown}), "
+              "so this run sees fewer errors than CI.")
     return 0
 
 
